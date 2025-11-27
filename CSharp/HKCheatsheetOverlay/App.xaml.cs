@@ -92,9 +92,15 @@ public partial class App : Application
                 // - Cria janela e pipeline WPF
                 // - Registra WndProc (Loaded)
                 // - Esconde imediatamente (sem taskbar)
+                //
+                // IMPORTANTE:
+                // Não deixamos a janela em estado Minimized, pois isso fazia com que
+                // o primeiro Toggle() disparado via WM_SHOW_OVERLAY exibisse apenas
+                // um "quadradinho" minimizado em um canto da tela. Mantemos o estado
+                // Normal e apenas usamos Opacity/Hide para aquecer em background.
                 Log("StartHidden=true - warming up MainWindow em background (sem mostrar).");
                 mainWindow.ShowInTaskbar = false;
-                mainWindow.WindowState = WindowState.Minimized;
+                mainWindow.WindowState = WindowState.Normal;
 
                 // Deixa WPF criar o handle / disparar Loaded / registrar hook
                 mainWindow.Opacity = 0;
