@@ -266,6 +266,9 @@ public partial class MainWindow : Window
             PerfLog($"Toggle() step BuildUI = {sw.ElapsedMilliseconds}ms");
 
             sw.Restart();
+            // Garante que a janela não fique presa em estado Minimized
+            // (pode acontecer após o warmup em background).
+            WindowState = WindowState.Normal;
             Show();
             Activate();
             PerfLog($"Toggle() step Show+Activate = {sw.ElapsedMilliseconds}ms");
