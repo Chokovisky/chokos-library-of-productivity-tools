@@ -1,0 +1,123 @@
+<Window x:Class="RadialMenu.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:RadialMenu"
+        Title="RadialMenu"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Background="Transparent"
+        Topmost="True"
+        ShowInTaskbar="False"
+        WindowState="Normal"
+        WindowStartupLocation="Manual"
+        Cursor="None"
+        KeyDown="Window_KeyDown"
+        MouseDown="Window_MouseDown"
+        MouseUp="Window_MouseUp">
+    
+    <Window.Resources>
+        <!-- Animation for menu opening -->
+        <Storyboard x:Key="OpenAnimation">
+            <DoubleAnimation Storyboard.TargetName="MenuContainer"
+                           Storyboard.TargetProperty="Opacity"
+                           From="0" To="1" Duration="0:0:0.15"/>
+            <DoubleAnimation Storyboard.TargetName="MenuScaleTransform"
+                           Storyboard.TargetProperty="ScaleX"
+                           From="0.8" To="1" Duration="0:0:0.15">
+                <DoubleAnimation.EasingFunction>
+                    <CubicEase EasingMode="EaseOut"/>
+                </DoubleAnimation.EasingFunction>
+            </DoubleAnimation>
+            <DoubleAnimation Storyboard.TargetName="MenuScaleTransform"
+                           Storyboard.TargetProperty="ScaleY"
+                           From="0.8" To="1" Duration="0:0:0.15">
+                <DoubleAnimation.EasingFunction>
+                    <CubicEase EasingMode="EaseOut"/>
+                </DoubleAnimation.EasingFunction>
+            </DoubleAnimation>
+        </Storyboard>
+        
+        <!-- Animation for menu closing -->
+        <Storyboard x:Key="CloseAnimation" Completed="CloseAnimation_Completed">
+            <DoubleAnimation Storyboard.TargetName="MenuContainer"
+                           Storyboard.TargetProperty="Opacity"
+                           From="1" To="0" Duration="0:0:0.1"/>
+            <DoubleAnimation Storyboard.TargetName="MenuScaleTransform"
+                           Storyboard.TargetProperty="ScaleX"
+                           From="1" To="0.9" Duration="0:0:0.1">
+                <DoubleAnimation.EasingFunction>
+                    <CubicEase EasingMode="EaseIn"/>
+                </DoubleAnimation.EasingFunction>
+            </DoubleAnimation>
+            <DoubleAnimation Storyboard.TargetName="MenuScaleTransform"
+                           Storyboard.TargetProperty="ScaleY"
+                           From="1" To="0.9" Duration="0:0:0.1">
+                <DoubleAnimation.EasingFunction>
+                    <CubicEase EasingMode="EaseIn"/>
+                </DoubleAnimation.EasingFunction>
+            </DoubleAnimation>
+        </Storyboard>
+    </Window.Resources>
+    
+    <!-- Very subtle backdrop - almost invisible, just catches clicks -->
+    <Grid>
+        <Rectangle Fill="#01000000" MouseDown="Backdrop_MouseDown"/>
+        
+        <!-- Menu Container - positioned at center -->
+        <Canvas x:Name="MenuCanvas">
+            <Grid x:Name="MenuContainer" Opacity="0">
+                <Grid.RenderTransform>
+                    <TransformGroup>
+                        <ScaleTransform x:Name="MenuScaleTransform" ScaleX="1" ScaleY="1"/>
+                    </TransformGroup>
+                </Grid.RenderTransform>
+                
+                <!-- The radial menu will be drawn here -->
+                <Canvas x:Name="RadialCanvas" Width="400" Height="400">
+                    <!-- Central cancel zone -->
+                    <Ellipse x:Name="CancelZone" 
+                             Width="80" Height="80"
+                             Fill="{StaticResource CancelZoneBrush}"
+                             Stroke="{StaticResource BorderBrush}"
+                             StrokeThickness="2"
+                             Canvas.Left="160" Canvas.Top="160"/>
+                    
+                    <!-- Selection indicator -->
+                    <Path x:Name="SelectionIndicator" 
+                          Fill="#40FFFFFF"
+                          Stroke="{StaticResource AccentBrush}"
+                          StrokeThickness="2"
+                          Visibility="Collapsed"/>
+                    
+                    <!-- Direction indicator line -->
+                    <Line x:Name="DirectionLine"
+                          X1="200" Y1="200" X2="200" Y2="200"
+                          Stroke="{StaticResource AccentBrush}"
+                          StrokeThickness="2"
+                          StrokeDashArray="4 2"
+                          Opacity="0.5"
+                          Visibility="Collapsed"/>
+                    
+                    <!-- Items container -->
+                    <Canvas x:Name="ItemsCanvas"/>
+                    
+                    <!-- Center label (shows selected item or cancel) -->
+                    <Border x:Name="CenterLabel"
+                            Canvas.Left="120" Canvas.Top="175"
+                            Width="160" Height="50"
+                            Background="Transparent">
+                        <TextBlock x:Name="CenterText"
+                                   Text="Cancel"
+                                   Foreground="{StaticResource TextSecondaryBrush}"
+                                   FontSize="14"
+                                   FontWeight="SemiBold"
+                                   HorizontalAlignment="Center"
+                                   VerticalAlignment="Center"
+                                   TextAlignment="Center"
+                                   TextWrapping="Wrap"/>
+                    </Border>
+                </Canvas>
+            </Grid>
+        </Canvas>
+    </Grid>
+</Window>
