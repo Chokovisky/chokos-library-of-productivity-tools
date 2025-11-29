@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -6,109 +7,18 @@ using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Shapes;
+using ChokoLPT.Shared.Helpers;
+using ChokoLPT.Shared.Services;
+using RadialMenu.Models;
 
 namespace RadialMenu;
 
 public partial class MainWindow : Window
 {
-    #region Native Methods
-    
-    [DllImport("user32.dll")]
-    private static extern bool ClipCursor(ref RECT lpRect);
-    
-    [DllImport("user32.dll")]
-    private static extern bool ClipCursor(IntPtr lpRect);
-    
-    [DllImport("user32.dll")]
-    private static extern bool GetCursorPos(out POINT lpPoint);
-    
-    [DllImport("user32.dll")]
-    private static extern bool SetCursorPos(int x, int y);
-    
-    [DllImport("user32.dll")]
-    private static extern int ShowCursor(bool bShow);
-    
-    [DllImport("user32.dll")]
-    private static extern bool RegisterRawInputDevices(RAWINPUTDEVICE[] pRawInputDevices, uint uiNumDevices, uint cbSize);
-    
-    [DllImport("user32.dll")]
-    private static extern uint GetRawInputData(IntPtr hRawInput, uint uiCommand, IntPtr pData, ref uint pcbSize, uint cbSizeHeader);
-    
-    [DllImport("user32.dll")]
-    private static extern IntPtr MonitorFromPoint(POINT pt, uint dwFlags);
-    
-    [DllImport("user32.dll")]
-    private static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFO lpmi);
-    
-    [StructLayout(LayoutKind.Sequential)]
-    private struct RECT
-    {
-        public int Left, Top, Right, Bottom;
-    }
-    
-    [StructLayout(LayoutKind.Sequential)]
-    private struct POINT
-    {
-        public int X, Y;
-    }
-    
-    [StructLayout(LayoutKind.Sequential)]
-    private struct MONITORINFO
-    {
-        public uint cbSize;
-        public RECT rcMonitor;
-        public RECT rcWork;
-        public uint dwFlags;
-    }
-    
-    [StructLayout(LayoutKind.Sequential)]
-    private struct RAWINPUTDEVICE
-    {
-        public ushort usUsagePage;
-        public ushort usUsage;
-        public uint dwFlags;
-        public IntPtr hwndTarget;
-    }
-    
-    [StructLayout(LayoutKind.Sequential)]
-    private struct RAWINPUTHEADER
-    {
-        public uint dwType;
-        public uint dwSize;
-        public IntPtr hDevice;
-        public IntPtr wParam;
-    }
-    
-    [StructLayout(LayoutKind.Sequential)]
-    private struct RAWMOUSE
-    {
-        public ushort usFlags;
-        public ushort usButtonFlags;  // This is part of union with ulButtons
-        public ushort usButtonData;
-        public uint ulRawButtons;
-        public int lLastX;
-        public int lLastY;
-        public uint ulExtraInformation;
-    }
-    
-    [StructLayout(LayoutKind.Sequential)]
-    private struct RAWINPUT
-    {
-        public RAWINPUTHEADER header;
-        public RAWMOUSE mouse;
-    }
-    
-    private const int WM_INPUT = 0x00FF;
-    private const uint RID_INPUT = 0x10000003;
-    private const uint RIM_TYPEMOUSE = 0;
-    private const uint RIDEV_INPUTSINK = 0x00000100;
-    private const uint MONITOR_DEFAULTTONEAREST = 2;
-    
-    #endregion
     
     #region Fields
     
-    private List<MenuItemData> _menuItems = new();
+    private List<RadialMenuItem> _menuItems = new();
     private int _selectedIndex = -1; // -1 = center/cancel
     private double _virtualX = 0;
     private double _virtualY = 0;
@@ -119,7 +29,6 @@ public partial class MainWindow : Window
     private double _innerRadius = 50;
     private double _selectionThreshold = 15;  // Minimum distance to select (very small!)
     private bool _isClosing = false;
-    private string? _result = null;
     private IntPtr _hwnd;
     private HwndSource? _hwndSource;
     private Point _originalCursorPos;
@@ -138,6 +47,16 @@ public partial class MainWindow : Window
     // Mode: center of screen vs at mouse position
     private bool _atMousePosition = false;
     private double _itemSize = 70;  // Size of each item circle
+
+    // Spec-related config
+    private string? _title;
+    private IntPtr _callbackHwnd = IntPtr.Zero;
+    private double? _initialX;
+    private double? _initialY;
+    private bool _preferStdinJson = false;
+
+    // Result item (id/label/icon/color)
+    private RadialMenuItem? _resultItem;
     
     #endregion
     
@@ -151,23 +70,25 @@ public partial class MainWindow : Window
         
         App.Log("InitializeComponent completed");
         
-        // Parse arguments or use demo items
-        if (args != null && args.Length > 0)
+        var effectiveArgs = args ?? Array.Empty<string>();
+        ParseArguments(effectiveArgs);
+
+        // Prefer stdin JSON when explicitly requested
+        if (_preferStdinJson && Console.IsInputRedirected)
         {
-            ParseArguments(args);
+            App.Log("Reading config from stdin JSON due to --stdin flag");
+            ReadConfigFromStdin();
         }
-        else
+        else if (_menuItems.Count == 0 && Console.IsInputRedirected)
         {
-            // Check for stdin input
-            if (Console.IsInputRedirected)
-            {
-                ReadFromStdin();
-            }
-            else
-            {
-                // Demo mode
-                LoadDemoItems();
-            }
+            App.Log("No items from args, attempting to read config from stdin JSON");
+            ReadConfigFromStdin();
+        }
+        
+        if (_menuItems.Count == 0)
+        {
+            App.Log("No items provided, loading demo items");
+            LoadDemoItems();
         }
         
         App.Log($"Loaded {_menuItems.Count} menu items");
@@ -178,43 +99,55 @@ public partial class MainWindow : Window
     
     private void ParseArguments(string[] args)
     {
-        // Format: --items "Item1|Item2|Item3" [--icons "icon1.png|icon2.png"] [--colors "#FF0000|#00FF00"]
-        //         [--at-mouse] [--mini] [--radius 100] [--sensitivity 2.0]
+        // Spec formats:
+        // --items "id:label:icon,id2:label2:icon2"
+        // --title "Clipboard"
+        // --stdin (read JSON config from stdin)
+        // --hwnd 12345 (callback HWND for WM_COPYDATA)
+        // --x 100 --y 200
+        // Legacy options preserved: --at-mouse, --mini, --radius, --sensitivity
         for (int i = 0; i < args.Length; i++)
         {
-            switch (args[i].ToLower())
+            var arg = args[i];
+            switch (arg.ToLowerInvariant())
             {
                 case "--items":
                 case "-i":
                     if (i + 1 < args.Length)
                     {
-                        var items = args[++i].Split('|');
-                        foreach (var item in items)
-                        {
-                            _menuItems.Add(new MenuItemData { Label = item });
-                        }
+                        ParseItemsFromCli(args[++i]);
                     }
                     break;
-                    
-                case "--icons":
+
+                case "--title":
                     if (i + 1 < args.Length)
                     {
-                        var icons = args[++i].Split('|');
-                        for (int j = 0; j < Math.Min(icons.Length, _menuItems.Count); j++)
-                        {
-                            _menuItems[j].IconPath = icons[j];
-                        }
+                        _title = args[++i];
                     }
                     break;
-                    
-                case "--colors":
-                    if (i + 1 < args.Length)
+
+                case "--stdin":
+                    _preferStdinJson = true;
+                    break;
+
+                case "--hwnd":
+                    if (i + 1 < args.Length && long.TryParse(args[++i], out var hwndVal))
                     {
-                        var colors = args[++i].Split('|');
-                        for (int j = 0; j < Math.Min(colors.Length, _menuItems.Count); j++)
-                        {
-                            _menuItems[j].Color = colors[j];
-                        }
+                        _callbackHwnd = new IntPtr(hwndVal);
+                    }
+                    break;
+
+                case "--x":
+                    if (i + 1 < args.Length && double.TryParse(args[++i], out var x))
+                    {
+                        _initialX = x;
+                    }
+                    break;
+
+                case "--y":
+                    if (i + 1 < args.Length && double.TryParse(args[++i], out var y))
+                    {
+                        _initialY = y;
                     }
                     break;
                     
@@ -247,104 +180,176 @@ public partial class MainWindow : Window
                     break;
             }
         }
-        
-        if (_menuItems.Count == 0)
-        {
-            LoadDemoItems();
-        }
     }
-    
-    private void ReadFromStdin()
+
+    private void ParseItemsFromCli(string itemsArg)
     {
-        // Read JSON or simple format from stdin
-        // Format: one item per line, or JSON array
-        try
+        // New format: id:label:icon,id2:label2:icon2
+        // Legacy fallback: "Label1|Label2|Label3"
+        if (string.IsNullOrWhiteSpace(itemsArg))
+            return;
+
+        // First split by commas into item specs
+        var specs = itemsArg.Split(',', StringSplitOptions.RemoveEmptyEntries);
+
+        // If there's only one spec and it contains '|' but no ':', treat as legacy
+        if (specs.Length == 1 && specs[0].Contains('|') && !specs[0].Contains(':'))
         {
-            string? line;
-            while ((line = Console.ReadLine()) != null && !string.IsNullOrWhiteSpace(line))
+            var labels = specs[0].Split('|', StringSplitOptions.RemoveEmptyEntries);
+            foreach (var labelRaw in labels)
             {
-                if (line.StartsWith("[") || line.StartsWith("{"))
+                var label = labelRaw.Trim();
+                if (label.Length == 0) continue;
+
+                _menuItems.Add(new RadialMenuItem
                 {
-                    // JSON format - parse accordingly
-                    // For simplicity, we'll use a basic parser
-                    ParseJsonItems(line);
-                    break;
-                }
-                else
-                {
-                    // Simple format: Label|IconPath|Color
-                    var parts = line.Split('|');
-                    _menuItems.Add(new MenuItemData
-                    {
-                        Label = parts[0],
-                        IconPath = parts.Length > 1 ? parts[1] : null,
-                        Color = parts.Length > 2 ? parts[2] : null
-                    });
-                }
+                    Id = label,
+                    Label = label
+                });
             }
+            return;
         }
-        catch { }
-        
-        if (_menuItems.Count == 0)
+
+        foreach (var specRaw in specs)
         {
-            LoadDemoItems();
+            var spec = specRaw.Trim();
+            if (spec.Length == 0) continue;
+
+            var parts = spec.Split(':');
+            string id = parts.Length > 0 ? parts[0] : string.Empty;
+            string label = parts.Length > 1 ? parts[1] : id;
+            string? icon = parts.Length > 2 ? parts[2] : null;
+
+            if (string.IsNullOrWhiteSpace(id) && string.IsNullOrWhiteSpace(label))
+                continue;
+
+            if (string.IsNullOrWhiteSpace(id))
+                id = label;
+            if (string.IsNullOrWhiteSpace(label))
+                label = id;
+
+            _menuItems.Add(new RadialMenuItem
+            {
+                Id = id,
+                Label = label,
+                Icon = icon
+            });
         }
     }
     
-    private void ParseJsonItems(string json)
+    private void ReadConfigFromStdin()
     {
-        // Basic JSON parsing for menu items
-        // Expected: [{"label":"Item1","icon":"path","color":"#FFF"},...]
         try
         {
-            json = json.Trim();
-            if (json.StartsWith("[")) json = json[1..];
-            if (json.EndsWith("]")) json = json[..^1];
-            
-            var items = json.Split(new[] { "},{" }, StringSplitOptions.RemoveEmptyEntries);
-            foreach (var item in items)
+            string all = Console.In.ReadToEnd();
+            if (string.IsNullOrWhiteSpace(all))
+                return;
+
+            ParseConfigJson(all);
+        }
+        catch (Exception ex)
+        {
+            App.Log($"Error reading config from stdin: {ex}");
+        }
+    }
+
+    private void ParseConfigJson(string json)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+
+            if (root.ValueKind == JsonValueKind.Object)
             {
-                var cleaned = item.Replace("{", "").Replace("}", "");
-                var menuItem = new MenuItemData();
-                
-                foreach (var pair in cleaned.Split(','))
+                // title
+                if (root.TryGetProperty("title", out var titleProp) && titleProp.ValueKind == JsonValueKind.String)
                 {
-                    var kv = pair.Split(':');
-                    if (kv.Length == 2)
+                    _title = titleProp.GetString();
+                }
+
+                // hwnd_callback
+                if (root.TryGetProperty("hwnd_callback", out var hwndProp))
+                {
+                    long hwndVal;
+                    switch (hwndProp.ValueKind)
                     {
-                        var key = kv[0].Trim().Trim('"').ToLower();
-                        var value = kv[1].Trim().Trim('"');
-                        
-                        switch (key)
-                        {
-                            case "label": menuItem.Label = value; break;
-                            case "icon": menuItem.IconPath = value; break;
-                            case "color": menuItem.Color = value; break;
-                        }
+                        case JsonValueKind.Number when hwndProp.TryGetInt64(out hwndVal):
+                            _callbackHwnd = new IntPtr(hwndVal);
+                            break;
+                        case JsonValueKind.String:
+                            var s = hwndProp.GetString();
+                            if (!string.IsNullOrWhiteSpace(s) && long.TryParse(s, out hwndVal))
+                            {
+                                _callbackHwnd = new IntPtr(hwndVal);
+                            }
+                            break;
                     }
                 }
-                
-                if (!string.IsNullOrEmpty(menuItem.Label))
+
+                // items array
+                if (root.TryGetProperty("items", out var itemsProp) && itemsProp.ValueKind == JsonValueKind.Array)
                 {
-                    _menuItems.Add(menuItem);
+                    ParseItemsArray(itemsProp);
                 }
             }
+            else if (root.ValueKind == JsonValueKind.Array)
+            {
+                // Backwards-compatible: JSON is just an array of items
+                ParseItemsArray(root);
+            }
         }
-        catch { }
+        catch (Exception ex)
+        {
+            App.Log($"Error parsing JSON config: {ex}");
+        }
+    }
+
+    private void ParseItemsArray(JsonElement itemsElement)
+    {
+        foreach (var elem in itemsElement.EnumerateArray())
+        {
+            if (elem.ValueKind != JsonValueKind.Object)
+                continue;
+
+            var item = new RadialMenuItem();
+
+            if (elem.TryGetProperty("id", out var idProp) && idProp.ValueKind == JsonValueKind.String)
+                item.Id = idProp.GetString() ?? string.Empty;
+
+            if (elem.TryGetProperty("label", out var labelProp) && labelProp.ValueKind == JsonValueKind.String)
+                item.Label = labelProp.GetString() ?? string.Empty;
+
+            if (elem.TryGetProperty("icon", out var iconProp) && iconProp.ValueKind == JsonValueKind.String)
+                item.Icon = iconProp.GetString();
+
+            if (elem.TryGetProperty("color", out var colorProp) && colorProp.ValueKind == JsonValueKind.String)
+                item.Color = colorProp.GetString();
+
+            if (string.IsNullOrWhiteSpace(item.Label) && string.IsNullOrWhiteSpace(item.Id))
+                continue;
+
+            if (string.IsNullOrWhiteSpace(item.Id))
+                item.Id = item.Label;
+            if (string.IsNullOrWhiteSpace(item.Label))
+                item.Label = item.Id;
+
+            _menuItems.Add(item);
+        }
     }
     
     private void LoadDemoItems()
     {
-        _menuItems = new List<MenuItemData>
+        _menuItems = new List<RadialMenuItem>
         {
-            new() { Label = "Copy", Color = "#4CAF50" },
-            new() { Label = "Paste", Color = "#2196F3" },
-            new() { Label = "Cut", Color = "#FF9800" },
-            new() { Label = "Delete", Color = "#F44336" },
-            new() { Label = "Undo", Color = "#9C27B0" },
-            new() { Label = "Redo", Color = "#00BCD4" },
-            new() { Label = "Select All", Color = "#795548" },
-            new() { Label = "Find", Color = "#607D8B" }
+            new() { Id = "copy", Label = "Copy", Color = "#4CAF50" },
+            new() { Id = "paste", Label = "Paste", Color = "#2196F3" },
+            new() { Id = "cut", Label = "Cut", Color = "#FF9800" },
+            new() { Id = "delete", Label = "Delete", Color = "#F44336" },
+            new() { Id = "undo", Label = "Undo", Color = "#9C27B0" },
+            new() { Id = "redo", Label = "Redo", Color = "#00BCD4" },
+            new() { Id = "select_all", Label = "Select All", Color = "#795548" },
+            new() { Id = "find", Label = "Find", Color = "#607D8B" }
         };
     }
     
@@ -357,14 +362,21 @@ public partial class MainWindow : Window
         _hwndSource?.AddHook(WndProc);
         
         // Get current cursor position and the monitor it's on
-        GetCursorPos(out POINT cursorPos);
+        Win32.GetCursorPos(out Win32.POINT cursorPos);
         _originalCursorPos = new Point(cursorPos.X, cursorPos.Y);
         App.Log($"Original cursor pos: {_originalCursorPos}");
         
-        // Get the monitor where cursor is
-        var monitor = MonitorFromPoint(cursorPos, MONITOR_DEFAULTTONEAREST);
-        var monitorInfo = new MONITORINFO { cbSize = (uint)Marshal.SizeOf<MONITORINFO>() };
-        GetMonitorInfo(monitor, ref monitorInfo);
+        // Decide reference point for monitor/menu center: either explicit X/Y or cursor
+        var refPoint = cursorPos;
+        if (_initialX.HasValue && _initialY.HasValue)
+        {
+            refPoint = new Win32.POINT { X = (int)_initialX.Value, Y = (int)_initialY.Value };
+        }
+        
+        // Get the monitor where cursor (or explicit point) is
+        var monitor = Win32.MonitorFromPoint(refPoint, Win32.MONITOR_DEFAULTTONEAREST);
+        var monitorInfo = new Win32.MONITORINFO { cbSize = (uint)Marshal.SizeOf<Win32.MONITORINFO>() };
+        Win32.GetMonitorInfo(monitor, ref monitorInfo);
         
         // Get monitor bounds
         var monitorRect = monitorInfo.rcMonitor;
@@ -387,7 +399,15 @@ public partial class MainWindow : Window
         double menuCenterX, menuCenterY;
         double screenCenterX, screenCenterY;
         
-        if (_atMousePosition)
+        if (_initialX.HasValue && _initialY.HasValue)
+        {
+            // Explicit X/Y in screen coordinates
+            menuCenterX = _initialX.Value - monitorRect.Left;
+            menuCenterY = _initialY.Value - monitorRect.Top;
+            screenCenterX = _initialX.Value;
+            screenCenterY = _initialY.Value;
+        }
+        else if (_atMousePosition)
         {
             // Show at mouse position (in window coordinates)
             menuCenterX = cursorPos.X - monitorRect.Left;
@@ -511,7 +531,7 @@ public partial class MainWindow : Window
         }
     }
     
-    private Border CreateItemVisual(MenuItemData item, int index)
+    private Border CreateItemVisual(RadialMenuItem item, int index)
     {
         var color = !string.IsNullOrEmpty(item.Color) 
             ? (Color)ColorConverter.ConvertFromString(item.Color)
@@ -701,40 +721,45 @@ public partial class MainWindow : Window
     
     private void RegisterRawInput()
     {
-        var device = new RAWINPUTDEVICE
+        var device = new Win32.RAWINPUTDEVICE
         {
             usUsagePage = 0x01,
             usUsage = 0x02, // Mouse
-            dwFlags = RIDEV_INPUTSINK,
+            dwFlags = Win32.RIDEV_INPUTSINK,
             hwndTarget = _hwnd
         };
         
-        RegisterRawInputDevices(new[] { device }, 1, (uint)Marshal.SizeOf<RAWINPUTDEVICE>());
+        Win32.RegisterRawInputDevices(new[] { device }, 1, (uint)Marshal.SizeOf<Win32.RAWINPUTDEVICE>());
     }
     
-    private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+    private void WndProcHelper(int msg, IntPtr lParam, ref bool handled)
     {
-        if (msg == WM_INPUT)
+        if (msg == Win32.WM_INPUT)
         {
             ProcessRawInput(lParam);
             handled = true;
         }
+    }
+    
+    private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+    {
+        WndProcHelper(msg, lParam, ref handled);
         return IntPtr.Zero;
     }
     
     private void ProcessRawInput(IntPtr lParam)
     {
         uint size = 0;
-        GetRawInputData(lParam, RID_INPUT, IntPtr.Zero, ref size, (uint)Marshal.SizeOf<RAWINPUTHEADER>());
+        Win32.GetRawInputData(lParam, Win32.RID_INPUT, IntPtr.Zero, ref size, (uint)Marshal.SizeOf<Win32.RAWINPUTHEADER>());
         
         IntPtr buffer = Marshal.AllocHGlobal((int)size);
         try
         {
-            if (GetRawInputData(lParam, RID_INPUT, buffer, ref size, (uint)Marshal.SizeOf<RAWINPUTHEADER>()) == size)
+            if (Win32.GetRawInputData(lParam, Win32.RID_INPUT, buffer, ref size, (uint)Marshal.SizeOf<Win32.RAWINPUTHEADER>()) == size)
             {
-                var raw = Marshal.PtrToStructure<RAWINPUT>(buffer);
+                var raw = Marshal.PtrToStructure<Win32.RAWINPUT>(buffer);
                 
-                if (raw.header.dwType == RIM_TYPEMOUSE)
+                if (raw.header.dwType == Win32.RIM_TYPEMOUSE)
                 {
                     int deltaX = raw.mouse.lLastX;
                     int deltaY = raw.mouse.lLastY;
@@ -777,7 +802,7 @@ public partial class MainWindow : Window
     {
         if (!_cursorHidden)
         {
-            ShowCursor(false);
+            Win32.ShowCursor(false);
             _cursorHidden = true;
         }
     }
@@ -786,7 +811,7 @@ public partial class MainWindow : Window
     {
         if (_cursorHidden)
         {
-            ShowCursor(true);
+            Win32.ShowCursor(true);
             _cursorHidden = false;
         }
     }
@@ -797,17 +822,17 @@ public partial class MainWindow : Window
         int ix = (int)x;
         int iy = (int)y;
         
-        var rect = new RECT { Left = ix, Top = iy, Right = ix + 1, Bottom = iy + 1 };
-        ClipCursor(ref rect);
-        SetCursorPos(ix, iy);
+        var rect = new Win32.RECT { Left = ix, Top = iy, Right = ix + 1, Bottom = iy + 1 };
+        Win32.ClipCursor(ref rect);
+        Win32.SetCursorPos(ix, iy);
     }
     
     private void UnlockCursor()
     {
-        ClipCursor(IntPtr.Zero);
+        Win32.ClipCursor(IntPtr.Zero);
         
         // Restore original position
-        SetCursorPos((int)_originalCursorPos.X, (int)_originalCursorPos.Y);
+        Win32.SetCursorPos((int)_originalCursorPos.X, (int)_originalCursorPos.Y);
     }
     
     #endregion
@@ -857,7 +882,7 @@ public partial class MainWindow : Window
     {
         if (_selectedIndex >= 0 && _selectedIndex < _menuItems.Count)
         {
-            CloseWithResult(_menuItems[_selectedIndex].Label);
+            CloseWithResult(_menuItems[_selectedIndex]);
         }
         else
         {
@@ -869,15 +894,16 @@ public partial class MainWindow : Window
     
     #region Close & Result
     
-    private void CloseWithResult(string? result)
+    private void CloseWithResult(RadialMenuItem? item)
     {
-        App.Log($"CloseWithResult called with: {result ?? "null"}");
+        var debugId = item?.Id ?? item?.Label ?? "null";
+        App.Log($"CloseWithResult called with item: {debugId}");
         App.Log($"Stack trace: {Environment.StackTrace}");
         
         if (_isClosing) return;
         _isClosing = true;
         
-        _result = result;
+        _resultItem = item;
         
         // Play close animation
         var closeAnim = (Storyboard)Resources["CloseAnimation"];
@@ -886,10 +912,48 @@ public partial class MainWindow : Window
     
     private void CloseAnimation_Completed(object? sender, EventArgs e)
     {
-        // Output result to stdout
-        if (_result != null)
+        bool cancelled = _resultItem is null;
+
+        // Prepare id for output
+        string? id = null;
+        if (_resultItem is not null)
         {
-            Console.WriteLine(_result);
+            id = _resultItem.Id;
+            if (string.IsNullOrWhiteSpace(id))
+            {
+                id = _resultItem.Label;
+            }
+        }
+
+        // Send result via WM_COPYDATA to callback HWND if provided
+        if (_callbackHwnd != IntPtr.Zero)
+        {
+            try
+            {
+                string json;
+                if (!cancelled && id is not null)
+                {
+                    var payload = new { selected = id };
+                    json = JsonSerializer.Serialize(payload);
+                }
+                else
+                {
+                    var payload = new { selected = (string?)null, cancelled = true };
+                    json = JsonSerializer.Serialize(payload);
+                }
+
+                MessageService.SendJsonCopyData(_callbackHwnd, json);
+            }
+            catch (Exception ex)
+            {
+                App.Log($"Error sending WM_COPYDATA callback: {ex}");
+            }
+        }
+
+        // Stdout fallback per spec (returns id or CANCELLED)
+        if (!cancelled && id is not null)
+        {
+            Console.WriteLine(id);
         }
         else
         {
@@ -900,15 +964,9 @@ public partial class MainWindow : Window
         UnlockCursor();
         ShowCursorAgain();
         
-        Application.Current.Shutdown(_result != null ? 0 : 1);
+        Application.Current.Shutdown(!cancelled ? 0 : 1);
     }
     
     #endregion
 }
 
-public class MenuItemData
-{
-    public string Label { get; set; } = "";
-    public string? IconPath { get; set; }
-    public string? Color { get; set; }
-}

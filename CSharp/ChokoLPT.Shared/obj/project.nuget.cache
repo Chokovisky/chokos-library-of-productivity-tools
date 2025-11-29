@@ -1,0 +1,13 @@
+{
+  "version": 2,
+  "dgSpecHash": "4MCHGbLzECM=",
+  "success": true,
+  "projectFilePath": "c:\\Users\\flavi\\Documents\\DocumentSync\\ChokoLPT\\tentativa-essa-vai-mexer-aqui\\CSharp\\ChokoLPT.Shared\\ChokoLPT.Shared.csproj",
+  "expectedPackageFiles": [
+    "C:\\Users\\flavi\\.nuget\\packages\\microsoft.net.illink.tasks\\10.0.0\\microsoft.net.illink.tasks.10.0.0.nupkg.sha512",
+    "C:\\Users\\flavi\\.nuget\\packages\\microsoft.netcore.app.runtime.win-x64\\10.0.0\\microsoft.netcore.app.runtime.win-x64.10.0.0.nupkg.sha512",
+    "C:\\Users\\flavi\\.nuget\\packages\\microsoft.windowsdesktop.app.runtime.win-x64\\10.0.0\\microsoft.windowsdesktop.app.runtime.win-x64.10.0.0.nupkg.sha512",
+    "C:\\Users\\flavi\\.nuget\\packages\\microsoft.aspnetcore.app.runtime.win-x64\\10.0.0\\microsoft.aspnetcore.app.runtime.win-x64.10.0.0.nupkg.sha512"
+  ],
+  "logs": []
+}

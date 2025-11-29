@@ -1,0 +1,12 @@
+c:\Users\flavi\Documents\DocumentSync\ChokoLPT\tentativa-essa-vai-mexer-aqui\CSharp\ChokoLPT.Shared\bin\Debug\net10.0\ChokoLPT.Shared.deps.json
+c:\Users\flavi\Documents\DocumentSync\ChokoLPT\tentativa-essa-vai-mexer-aqui\CSharp\ChokoLPT.Shared\bin\Debug\net10.0\ChokoLPT.Shared.dll
+c:\Users\flavi\Documents\DocumentSync\ChokoLPT\tentativa-essa-vai-mexer-aqui\CSharp\ChokoLPT.Shared\bin\Debug\net10.0\ChokoLPT.Shared.pdb
+c:\Users\flavi\Documents\DocumentSync\ChokoLPT\tentativa-essa-vai-mexer-aqui\CSharp\ChokoLPT.Shared\obj\Debug\net10.0\ChokoLPT.Shared.GeneratedMSBuildEditorConfig.editorconfig
+c:\Users\flavi\Documents\DocumentSync\ChokoLPT\tentativa-essa-vai-mexer-aqui\CSharp\ChokoLPT.Shared\obj\Debug\net10.0\ChokoLPT.Shared.AssemblyInfoInputs.cache
+c:\Users\flavi\Documents\DocumentSync\ChokoLPT\tentativa-essa-vai-mexer-aqui\CSharp\ChokoLPT.Shared\obj\Debug\net10.0\ChokoLPT.Shared.AssemblyInfo.cs
+c:\Users\flavi\Documents\DocumentSync\ChokoLPT\tentativa-essa-vai-mexer-aqui\CSharp\ChokoLPT.Shared\obj\Debug\net10.0\ChokoLPT.Shared.csproj.CoreCompileInputs.cache
+c:\Users\flavi\Documents\DocumentSync\ChokoLPT\tentativa-essa-vai-mexer-aqui\CSharp\ChokoLPT.Shared\obj\Debug\net10.0\ChokoLPT.Shared.sourcelink.json
+c:\Users\flavi\Documents\DocumentSync\ChokoLPT\tentativa-essa-vai-mexer-aqui\CSharp\ChokoLPT.Shared\obj\Debug\net10.0\ChokoLPT.Shared.dll
+c:\Users\flavi\Documents\DocumentSync\ChokoLPT\tentativa-essa-vai-mexer-aqui\CSharp\ChokoLPT.Shared\obj\Debug\net10.0\refint\ChokoLPT.Shared.dll
+c:\Users\flavi\Documents\DocumentSync\ChokoLPT\tentativa-essa-vai-mexer-aqui\CSharp\ChokoLPT.Shared\obj\Debug\net10.0\ChokoLPT.Shared.pdb
+c:\Users\flavi\Documents\DocumentSync\ChokoLPT\tentativa-essa-vai-mexer-aqui\CSharp\ChokoLPT.Shared\obj\Debug\net10.0\ref\ChokoLPT.Shared.dll

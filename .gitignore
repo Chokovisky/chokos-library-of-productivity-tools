@@ -4,5 +4,13 @@ obj/
 publish/
 *.exe
 
+# Exceção: manter bin/obj do projeto Shared no git
+!CSharp/ChokoLPT.Shared/bin/
+!CSharp/ChokoLPT.Shared/bin/**
+!CSharp/ChokoLPT.Shared/obj/
+!CSharp/ChokoLPT.Shared/obj/**
+
 # Tools compilados
-AHK/Tools/*.exe 
+AHK/Tools/*.exe
+
+/Tests

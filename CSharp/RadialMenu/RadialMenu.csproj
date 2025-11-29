@@ -6,7 +6,6 @@
     <UseWPF>true</UseWPF>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <ApplicationIcon>icon.ico</ApplicationIcon>
     
     <!-- Assembly info -->
     <AssemblyName>RadialMenu</AssemblyName>
@@ -15,12 +14,23 @@
     <Description>Gesture-based radial menu for productivity</Description>
   </PropertyGroup>
 
-  <ItemGroup>
-    <None Remove="icon.ico" />
-  </ItemGroup>
+  <!-- Match HKCheatsheetOverlay: single-file, self-contained publish for win-x64 -->
+  <PropertyGroup Condition="'$(Configuration)|$(RuntimeIdentifier)'=='Release|win-x64'">
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+
+    <!-- Self-contained + single-file for WPF RadialMenu.
+         Extra flag IncludeAllContentForSelfExtract ajuda a garantir
+         que todos os binários nativos do WPF (wpfgfx_cor3.dll etc.)
+         sejam extraídos corretamente, evitando o DllNotFound interno. -->
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <IncludeAllContentForSelfExtract>true</IncludeAllContentForSelfExtract>
+    <PublishReadyToRun>false</PublishReadyToRun>
+  </PropertyGroup>
 
   <ItemGroup>
-    <Resource Include="icon.ico" Condition="Exists('icon.ico')" />
+    <ProjectReference Include="..\ChokoLPT.Shared\ChokoLPT.Shared.csproj" />
   </ItemGroup>
 
 </Project>

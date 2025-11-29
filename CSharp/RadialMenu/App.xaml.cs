@@ -13,6 +13,14 @@ public partial class App : Application
     private static extern bool AllocConsole();
     
     private const int ATTACH_PARENT_PROCESS = -1;
+
+    private static readonly string LogDirectory = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "ChokoLPT",
+        "logs"
+    );
+
+    private static readonly string LogFilePath = Path.Combine(LogDirectory, "radialmenu_debug.log");
     
     public static void Log(string message)
     {
@@ -20,12 +28,20 @@ public partial class App : Application
         Console.WriteLine(line);
         Console.Out.Flush();
         
-        // Also log to file for debugging
+        // Also log to file for debugging under %LocalAppData%\ChokoLPT\logs
         try
         {
-            File.AppendAllText("radialmenu_debug.log", line + Environment.NewLine);
+            if (!Directory.Exists(LogDirectory))
+            {
+                Directory.CreateDirectory(LogDirectory);
+            }
+            
+            File.AppendAllText(LogFilePath, line + Environment.NewLine);
         }
-        catch { }
+        catch
+        {
+            // Never let logging crash the app
+        }
     }
     
     protected override void OnStartup(StartupEventArgs e)
@@ -33,8 +49,18 @@ public partial class App : Application
         // Attach to parent console (so we can see output in terminal)
         AttachConsole(ATTACH_PARENT_PROCESS);
         
-        // Clear old log
-        try { File.Delete("radialmenu_debug.log"); } catch { }
+        // Clear old log under %LocalAppData%\ChokoLPT\logs
+        try
+        {
+            if (File.Exists(LogFilePath))
+            {
+                File.Delete(LogFilePath);
+            }
+        }
+        catch
+        {
+            // Ignore log cleanup failures
+        }
         
         Log("App.OnStartup called");
         Log($"Args: [{string.Join(", ", e.Args)}]");
