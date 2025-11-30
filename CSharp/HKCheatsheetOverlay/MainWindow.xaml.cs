@@ -8,46 +8,13 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
+using ChokoLPT.Shared.Helpers;
+using ChokoLPT.Shared.Models;
 
 namespace HKCheatsheetOverlay;
 
 public partial class MainWindow : Window
 {
-    #region Native Methods
-    
-    [DllImport("user32.dll")]
-    private static extern IntPtr GetForegroundWindow();
-    
-    [DllImport("user32.dll")]
-    private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
-    
-    [DllImport("user32.dll")]
-    private static extern IntPtr MonitorFromPoint(POINT pt, uint dwFlags);
-    
-    [DllImport("user32.dll")]
-    private static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFO lpmi);
-    
-    [DllImport("user32.dll")]
-    private static extern bool GetCursorPos(out POINT lpPoint);
-    
-    private const uint MONITOR_DEFAULTTONEAREST = 2;
-    
-    [StructLayout(LayoutKind.Sequential)]
-    private struct POINT { public int X, Y; }
-    
-    [StructLayout(LayoutKind.Sequential)]
-    private struct RECT { public int Left, Top, Right, Bottom; }
-    
-    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
-    private struct MONITORINFO
-    {
-        public uint cbSize;
-        public RECT rcMonitor;
-        public RECT rcWork;
-        public uint dwFlags;
-    }
-    
-    #endregion
     
     #region Fields
     
@@ -70,25 +37,14 @@ public partial class MainWindow : Window
     private int _selectedContextIndex = -1;
 
     // Logging de performance (para medir gargalos do Toggle)
-    private static readonly string PerfLogPath = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "ChokoLPT",
-        "logs",
-        "hkcheatsheet_overlay_perf.log"
-    );
+    private const string PerfLogFileName = "hkcheatsheet_overlay_perf.log";
 
     private static void PerfLog(string message)
     {
         try
         {
-            var dir = Path.GetDirectoryName(PerfLogPath);
-            if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
-                Directory.CreateDirectory(dir);
-
-            File.AppendAllText(
-                PerfLogPath,
-                $"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} | {message}{Environment.NewLine}"
-            );
+            var line = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} | {message}";
+            ChokoLPT.Shared.Services.LogService.AppendLine(PerfLogFileName, line);
         }
         catch
         {
@@ -284,20 +240,20 @@ public partial class MainWindow : Window
     
     private void PositionWindow()
     {
-        POINT cursorPos;
+        Win32.POINT cursorPos;
         if (_argX.HasValue && _argY.HasValue)
         {
-            cursorPos = new POINT { X = _argX.Value, Y = _argY.Value };
+            cursorPos = new Win32.POINT { X = _argX.Value, Y = _argY.Value };
         }
         else
         {
-            GetCursorPos(out cursorPos);
+            Win32.GetCursorPos(out cursorPos);
         }
         
-        var monitor = MonitorFromPoint(cursorPos, MONITOR_DEFAULTTONEAREST);
-        var monitorInfo = new MONITORINFO { cbSize = (uint)Marshal.SizeOf<MONITORINFO>() };
+        var monitor = Win32.MonitorFromPoint(cursorPos, Win32.MONITOR_DEFAULTTONEAREST);
+        var monitorInfo = new Win32.MONITORINFO { cbSize = (uint)Marshal.SizeOf<Win32.MONITORINFO>() };
         
-        if (GetMonitorInfo(monitor, ref monitorInfo))
+        if (Win32.GetMonitorInfo(monitor, ref monitorInfo))
         {
             var workArea = monitorInfo.rcWork;
             int monitorWidth = workArea.Right - workArea.Left;
@@ -505,10 +461,10 @@ public partial class MainWindow : Window
             
             if (string.IsNullOrEmpty(exeName))
             {
-                var hwnd = GetForegroundWindow();
+                var hwnd = Win32.GetForegroundWindow();
                 if (hwnd != IntPtr.Zero)
                 {
-                    GetWindowThreadProcessId(hwnd, out uint processId);
+                    Win32.GetWindowThreadProcessId(hwnd, out uint processId);
                     var process = Process.GetProcessById((int)processId);
                     exeName = process.ProcessName + ".exe";
                 }
@@ -993,99 +949,3 @@ public partial class MainWindow : Window
     
     #endregion
 }
-
-#region Data Models
-
-public class HotkeyConfig
-{
-    public ProfilesConfig? Profiles { get; set; }
-    public Dictionary<string, string>? Contexts { get; set; }
-    public Dictionary<string, string[]>? ContextGroups { get; set; }
-    public List<HotkeyItem>? Hotkeys { get; set; }
-}
-
-public class ProfilesConfig
-{
-    public string[]? Available { get; set; }
-    public string? Active { get; set; }
-    public Dictionary<string, ProfileMeta>? Meta { get; set; }
-}
-
-public class ProfileMeta
-{
-    public string? Icon { get; set; }
-    public string? Description { get; set; }
-}
-
-public class HotkeyItem
-{
-    public string? Id { get; set; }
-    public string? Key { get; set; }
-    public string? Description { get; set; }
-    public string[]? Profiles { get; set; }
-    public string? Context { get; set; }
-
-    // Alguns JSONs antigos podem ter "enabled" como string ("true"/"false") ou número (0/1).
-    // Este converter torna o parser tolerante a esses formatos.
-    [JsonConverter(typeof(FlexibleBoolConverter))]
-    public bool Enabled { get; set; } = true;
-}
-
-/// <summary>
-/// Converter tolerante para campos bool (aceita bool, string "true"/"false", "0"/"1", números).
-/// </summary>
-public sealed class FlexibleBoolConverter : JsonConverter<bool>
-{
-    public override bool Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
-    {
-        switch (reader.TokenType)
-        {
-            case JsonTokenType.True:
-                return true;
-            case JsonTokenType.False:
-                return false;
-            case JsonTokenType.Number:
-                try
-                {
-                    if (reader.TryGetInt64(out var num))
-                        return num != 0;
-                }
-                catch
-                {
-                    // ignore e cai para false mais abaixo
-                }
-                break;
-            case JsonTokenType.String:
-                var s = reader.GetString();
-                if (string.IsNullOrWhiteSpace(s))
-                    return false;
-
-                // Tenta bool direto
-                if (bool.TryParse(s, out var b))
-                    return b;
-
-                // Tenta número em string
-                if (long.TryParse(s, out var numStr))
-                    return numStr != 0;
-
-                // Alguns casos tipo "yes"/"no"
-                s = s.Trim().ToLowerInvariant();
-                if (s is "y" or "yes" or "sim")
-                    return true;
-                if (s is "n" or "no" or "nao" or "não")
-                    return false;
-                break;
-        }
-
-        // Valor inesperado: em vez de estourar exceção e matar o dashboard,
-        // assume false para continuar exibindo o resto das hotkeys.
-        return false;
-    }
-
-    public override void Write(Utf8JsonWriter writer, bool value, JsonSerializerOptions options)
-    {
-        writer.WriteBooleanValue(value);
-    }
-}
-
-#endregion

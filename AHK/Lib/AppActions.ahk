@@ -73,12 +73,50 @@ App_GoogleSearchSelection() {
 }
 
 ;; Abre Apps de forma inteligente (Foca se aberto, Abre se fechado)
-App_OpenOrFocus(exeName, fullPath) {
-    if WinExist("ahk_exe " . exeName)
+App_OpenOrFocus(exeName, fullPath := "") {
+    ; Se já existe janela do exe, apenas ativa
+    if WinExist("ahk_exe " . exeName) {
         WinActivate
-    else
-        try Run(fullPath)
+        return
+    }
+
+    ; Se não existe janela e temos caminho completo, tenta abrir
+    if (fullPath != "") {
+        try {
+            Run(fullPath)
+        } catch Error as e {
+            ToolTip("⚠ Falha ao abrir '" . exeName . "': " . e.Message)
+            SetTimer(() => ToolTip(), -1500)
+        }
+    } else {
+        ; Sem caminho completo: avisa em vez de explodir
+        ToolTip("⚠ App_OpenOrFocus sem fullPath para '" . exeName . "'")
+        SetTimer(() => ToolTip(), -1500)
+    }
 }
+
+; Wrappers específicos para o RadialMenu (sem parâmetros na action string)
+Radial_OpenNotion() {
+    ; Abre ou foca Notion
+    App_OpenOrFocus("Notion.exe")
+}
+
+Radial_OpenObsidian() {
+    ; Abre ou foca Obsidian
+    App_OpenOrFocus("Obsidian.exe")
+}
+
+Radial_OpenTerminal() {
+    ; Placeholder: tenta abrir Windows Terminal
+    ; Ajusta para o terminal que você realmente usa se precisar
+    App_OpenOrFocus("wt.exe")
+}
+
+Radial_OpenExplorer() {
+    ; Abre ou foca o Explorer
+    App_OpenOrFocus("explorer.exe")
+}
+
 ; ==============================================================================
 ; FIM DO ARQUIVO: Lib\AppActions.ahk
 ; ==============================================================================

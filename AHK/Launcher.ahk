@@ -46,6 +46,7 @@ SetWorkingDir A_ScriptDir
 
 ; 6. UI
 #Include "Lib\HKlistUI.ahk"
+#Include "Lib\RadialMenuUtils.ahk"
 
 ; 7. Keybindings (registra hotkeys do HotkeyData global)
 #Include "Config\Keybindings.ahk"
@@ -56,12 +57,15 @@ SetWorkingDir A_ScriptDir
 
 ; Inicializa Core (aplica config do CapsLock)
 Core_Initialize()
-
+ 
 ; Inicia TaskbarManager
 TaskbarManager.Start()
-
+ 
 ; Pré-aquece HKCheatsheetOverlay em background após um pequeno delay
 SetTimer(() => HKCheatsheetOverlayUtils.Warmup(), -5000)
+
+; Pré-aquece RadialMenu em background para evitar coldstart
+SetTimer(() => Run(A_ScriptDir . "\Tools\RadialMenu\RadialMenu.exe --background",, "Hide"), -6000)
 
 ; Hotkey de desenvolvimento/debug
 ^F5::Reload  ; Ctrl + F5 para recarregar

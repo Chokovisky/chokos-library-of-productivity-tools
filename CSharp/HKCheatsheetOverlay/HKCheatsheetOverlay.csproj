@@ -22,4 +22,8 @@
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     <PublishReadyToRun>false</PublishReadyToRun>
   </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ChokoLPT.Shared\ChokoLPT.Shared.csproj" />
+  </ItemGroup>
 </Project>

@@ -1,9 +1,9 @@
 using System;
-using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Windows;
+using ChokoLPT.Shared.Services;
 
 namespace HKCheatsheetOverlay;
 
@@ -15,25 +15,14 @@ public partial class App : Application
     // Custom message for singleton communication
     public const int WM_SHOW_OVERLAY = 0x8002;
 
-    private static readonly string LogPath = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "ChokoLPT",
-        "logs",
-        "hkcheatsheet_overlay_csharp.log"
-    );
+    private const string LogFileName = "hkcheatsheet_overlay_csharp.log";
 
     private static void Log(string message)
     {
         try
         {
-            var dir = Path.GetDirectoryName(LogPath);
-            if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
-                Directory.CreateDirectory(dir);
-
-            File.AppendAllText(
-                LogPath,
-                $"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} | {message}{Environment.NewLine}"
-            );
+            var line = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} | {message}";
+            LogService.AppendLine(LogFileName, line);
         }
         catch
         {

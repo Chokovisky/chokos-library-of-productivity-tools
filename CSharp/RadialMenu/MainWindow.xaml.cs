@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
@@ -72,6 +73,13 @@ public partial class MainWindow : Window
         
         var effectiveArgs = args ?? Array.Empty<string>();
         ParseArguments(effectiveArgs);
+
+        // Por padrão, abrir no mouse (a não ser que coordenadas explícitas tenham sido passadas).
+        // _initialX/_initialY têm prioridade sobre _atMousePosition.
+        if (!_initialX.HasValue && !_initialY.HasValue && !_atMousePosition)
+        {
+            _atMousePosition = true;
+        }
 
         // Prefer stdin JSON when explicitly requested
         if (_preferStdinJson && Console.IsInputRedirected)
@@ -457,15 +465,25 @@ public partial class MainWindow : Window
             screenCenterX = monitorRect.Left + menuCenterX;
             screenCenterY = monitorRect.Top + menuCenterY;
         }
-        
-        HideCursor();
-        LockCursor(screenCenterX, screenCenterY);
-        App.Log("Cursor hidden and locked");
-        
-        // Play open animation
-        var openAnim = (Storyboard)Resources["OpenAnimation"];
-        openAnim.Begin(this);
-        App.Log("Open animation started - Menu should be visible now!");
+
+        // No warmup: lock cursor and play open animation normally.
+        // Warmup (--background) já aconteceu em App.OnStartup com Opacity=0/Hide,
+        // então aqui não devemos roubar mouse/foco.
+        if (!App.IsBackgroundStartup)
+        {
+            HideCursor();
+            LockCursor(screenCenterX, screenCenterY);
+            App.Log("Cursor hidden and locked");
+            
+            // Play open animation
+            var openAnim = (Storyboard)Resources["OpenAnimation"];
+            openAnim.Begin(this);
+            App.Log("Open animation started - Menu should be visible now!");
+        }
+        else
+        {
+            App.Log("Background startup detected in MainWindow_Loaded - skipping cursor lock & open animation.");
+        }
     }
     
     private void MainWindow_Closing(object? sender, System.ComponentModel.CancelEventArgs e)
@@ -732,18 +750,22 @@ public partial class MainWindow : Window
         Win32.RegisterRawInputDevices(new[] { device }, 1, (uint)Marshal.SizeOf<Win32.RAWINPUTDEVICE>());
     }
     
-    private void WndProcHelper(int msg, IntPtr lParam, ref bool handled)
+    private void WndProcHelper(int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
     {
         if (msg == Win32.WM_INPUT)
         {
             ProcessRawInput(lParam);
             handled = true;
         }
+        else if (msg == 0x004A) // WM_COPYDATA
+        {
+            HandleCopyData(lParam, ref handled);
+        }
     }
     
     private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
     {
-        WndProcHelper(msg, lParam, ref handled);
+        WndProcHelper(msg, wParam, lParam, ref handled);
         return IntPtr.Zero;
     }
     
@@ -795,6 +817,116 @@ public partial class MainWindow : Window
         finally
         {
             Marshal.FreeHGlobal(buffer);
+        }
+    }
+
+    /// <summary>
+    /// Handles WM_COPYDATA messages with JSON payload to update menu items
+    /// without spawning a new process (warm resident instance).
+    /// </summary>
+    private void HandleCopyData(IntPtr lParam, ref bool handled)
+    {
+        try
+        {
+            var cds = Marshal.PtrToStructure<Win32.COPYDATASTRUCT>(lParam);
+            if (cds.lpData == IntPtr.Zero || cds.cbData <= 0)
+                return;
+
+            // Payload enviado via MessageService / AHK é UTF-8 (cbData em bytes).
+            var bytes = new byte[cds.cbData];
+            Marshal.Copy(cds.lpData, bytes, 0, cds.cbData);
+            string json = Encoding.UTF8.GetString(bytes);
+            if (string.IsNullOrWhiteSpace(json))
+                return;
+
+            App.Log($"HandleCopyData: received JSON length={json.Length}");
+            Dispatcher.BeginInvoke(() => UpdateFromJson(json));
+            handled = true;
+        }
+        catch (Exception ex)
+        {
+            App.Log($"Error in HandleCopyData: {ex}");
+        }
+    }
+
+    /// <summary>
+    /// Updates the current menu from a JSON payload (same format as stdin/CLI),
+    /// repositions at current mouse (with edge clamping) and shows the menu.
+    /// </summary>
+    private void UpdateFromJson(string json)
+    {
+        try
+        {
+            // Reset current state and parse new config
+            _menuItems.Clear();
+            _callbackHwnd = IntPtr.Zero;
+            _title = null;
+
+            ParseConfigJson(json);
+
+            if (_menuItems.Count == 0)
+            {
+                App.Log("UpdateFromJson: no items after parsing JSON, aborting.");
+                return;
+            }
+
+            // Get current cursor and monitor
+            Win32.GetCursorPos(out Win32.POINT cursorPos);
+            var monitor = Win32.MonitorFromPoint(cursorPos, Win32.MONITOR_DEFAULTTONEAREST);
+            var monitorInfo = new Win32.MONITORINFO { cbSize = (uint)Marshal.SizeOf<Win32.MONITORINFO>() };
+            Win32.GetMonitorInfo(monitor, ref monitorInfo);
+
+            var monitorRect = monitorInfo.rcMonitor;
+            int monitorWidth = monitorRect.Right - monitorRect.Left;
+            int monitorHeight = monitorRect.Bottom - monitorRect.Top;
+
+            // Cover the whole monitor
+            Left = monitorRect.Left;
+            Top = monitorRect.Top;
+            Width = monitorWidth;
+            Height = monitorHeight;
+
+            // Position menu at mouse with edge clamping (same logic as first load)
+            double menuCenterX = cursorPos.X - monitorRect.Left;
+            double menuCenterY = cursorPos.Y - monitorRect.Top;
+
+            double margin = _menuRadius + _itemSize + 10;
+            menuCenterX = Math.Max(margin, Math.Min(monitorWidth - margin, menuCenterX));
+            menuCenterY = Math.Max(margin, Math.Min(monitorHeight - margin, menuCenterY));
+
+            _menuCenter = new Point(menuCenterX, menuCenterY);
+
+            // Ensure canvas size is consistent with menu size
+            RadialCanvas.Width = (_menuRadius + _itemSize) * 2 + 20;
+            RadialCanvas.Height = (_menuRadius + _itemSize) * 2 + 20;
+
+            Canvas.SetLeft(MenuContainer, _menuCenter.X - RadialCanvas.Width / 2);
+            Canvas.SetTop(MenuContainer, _menuCenter.Y - RadialCanvas.Height / 2);
+
+            // Reset virtual position
+            _virtualX = 0;
+            _virtualY = 0;
+
+            // Build visuals with new items
+            BuildMenuVisuals();
+            App.Log($"UpdateFromJson: menu rebuilt with {_menuItems.Count} items");
+
+            // Lock/hide cursor when actually showing (warmup já passou)
+            double screenCenterX = monitorRect.Left + menuCenterX;
+            double screenCenterY = monitorRect.Top + menuCenterY;
+
+            HideCursor();
+            LockCursor(screenCenterX, screenCenterY);
+
+            // Show menu (reuse open animation)
+            Show();
+            Activate();
+            var openAnim = (Storyboard)Resources["OpenAnimation"];
+            openAnim.Begin(this);
+        }
+        catch (Exception ex)
+        {
+            App.Log($"Error in UpdateFromJson: {ex}");
         }
     }
     
@@ -942,7 +1074,8 @@ public partial class MainWindow : Window
                     json = JsonSerializer.Serialize(payload);
                 }
 
-                MessageService.SendJsonCopyData(_callbackHwnd, json);
+                // dwData marca a mensagem como vindo do RadialMenu (deve bater com _callbackTag no AHK)
+                MessageService.SendJsonCopyData(_callbackHwnd, json, new IntPtr(0x524D5253)); // 'RMRS'
             }
             catch (Exception ex)
             {
@@ -960,11 +1093,23 @@ public partial class MainWindow : Window
             Console.WriteLine("CANCELLED");
         }
         
-        // Cleanup and close
+        // Cleanup cursor
         UnlockCursor();
         ShowCursorAgain();
-        
-        Application.Current.Shutdown(!cancelled ? 0 : 1);
+
+        // Em modo normal (sem warmup), encerramos o processo como antes.
+        // Em modo warmup (--background), apenas escondemos a janela para reaproveitar
+        // a instância residente (singleton).
+        if (!App.IsBackgroundStartup)
+        {
+            Application.Current.Shutdown(!cancelled ? 0 : 1);
+        }
+        else
+        {
+            // Reset flag para permitir reuso em próximos gestos
+            _isClosing = false;
+            Hide();
+        }
     }
     
     #endregion
