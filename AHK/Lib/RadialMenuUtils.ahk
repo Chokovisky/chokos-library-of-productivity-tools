@@ -19,6 +19,53 @@ class RadialMenuUtils {
     static _callbackResult  := ""
     static _callbackReady   := false
     static _callbackTag     := 0x524D5253  ; 'RMRS'
+    static LogPath          := APP_DATA_PATH . "\logs\radialmenu_ahk.log"
+
+    static Log(msg) {
+        try {
+            timestamp := FormatTime(, "yyyy-MM-dd HH:mm:ss.") . A_MSec
+            FileAppend(timestamp . " | " . msg . "`n", this.LogPath, "UTF-8")
+        } catch {
+            ; nunca deixa logging quebrar o fluxo
+        }
+    }
+
+    ;; Pré-aquece o RadialMenu em background (singleton, estilo HKCheatsheetOverlayUtils.Warmup)
+    static Warmup() {
+        this.Log("Warmup() chamado.")
+        this.Log("ExePath='" . this.ExePath . "'")
+
+        if !FileExist(this.ExePath) {
+            msg := "RadialMenu.exe não encontrado para Warmup: " . this.ExePath
+            this.Log("ERRO: " . msg)
+            return
+        }
+
+        prevDH := A_DetectHiddenWindows
+        DetectHiddenWindows true
+        hwnd := 0
+        try {
+            hwnd := WinExist("ahk_exe RadialMenu.exe")
+        } catch {
+        } finally {
+            DetectHiddenWindows prevDH
+        }
+
+        if (hwnd) {
+            this.Log("Warmup(): processo/janela já existe (hwnd=" . hwnd . "), ignorando.")
+            return
+        }
+
+        try {
+            cmd := '"' . this.ExePath . '" --background'
+            this.Log("Warmup(): executando " . cmd)
+            ; WinExe WPF, sem console. Inicia em modo escondido, só criando MainWindow.
+            Run(cmd, , "Hide")
+            this.Log("Warmup(): processo iniciado para pré-aquecer RadialMenu.")
+        } catch as err {
+            this.Log("Warmup(): EXCEÇÃO ao iniciar RadialMenu em background: " . err.Message)
+        }
+    }
     
     ;; Mostra menu radial baseado em perfil e contexto ativo
     static ShowContextual() {
@@ -127,6 +174,8 @@ class RadialMenuUtils {
     static _CallRadialMenuJson(items) {
         if !FileExist(this.ExePath)
             return ""
+
+        this.Log("CallRadialMenuJson(): chamado com items.Length=" . items.Length)
  
         ; 1) Garante que há uma instância residente em background (incluindo janelas ocultas)
         prevDH := A_DetectHiddenWindows
@@ -135,27 +184,22 @@ class RadialMenuUtils {
         try {
             hwnd := WinExist("ahk_exe RadialMenu.exe")
             if (!hwnd) {
+                this.Log("CallRadialMenuJson(): nenhuma instância encontrada, iniciando --background.")
                 Run(this.ExePath . " --background",, "Hide")
                 Sleep 500
                 hwnd := WinExist("ahk_exe RadialMenu.exe")
             }
+        } catch as err {
+            this.Log("CallRadialMenuJson(): EXCEÇÃO ao procurar/criar instância: " . err.Message)
         } finally {
             DetectHiddenWindows prevDH
         }
         if (!hwnd) {
-            ; Falha explícita: não cai para CLI/coldstart.
-            ; Log em arquivo para inspeção posterior.
-            try {
-                FileAppend(
-                    "[" A_Now "] RadialMenuUtils: falha ao localizar instância residente de RadialMenu.exe após warmup.`n",
-                    A_ScriptDir . "\RadialMenu_WM_COPYDATA.log",
-                    "UTF-8"
-                )
-            }
-            catch {
-            }
+            this.Log("CallRadialMenuJson(): falha ao localizar instância residente de RadialMenu.exe após warmup.")
             return ""
         }
+ 
+        this.Log("CallRadialMenuJson(): usando hwnd=" . hwnd)
  
         ; 2) Garante callback global para receber o resultado via WM_COPYDATA
         this._EnsureCallback()
@@ -201,26 +245,38 @@ class RadialMenuUtils {
             json .= '}'
         }
         json .= ']}'
+
+        this.Log("CallRadialMenuJson(): JSON montado, length=" . StrLen(json))
  
         ; 4) Envia JSON via WM_COPYDATA para o RadialMenu residente
-        if !this._SendCopyData(hwnd, json)
+        if !this._SendCopyData(hwnd, json) {
+            this.Log("CallRadialMenuJson(): _SendCopyData() retornou false.")
             return ""
+        }
+ 
+        this.Log("CallRadialMenuJson(): WM_COPYDATA enviado, aguardando callback...")
  
         ; 5) Aguarda retorno via WM_COPYDATA (callback)
         this._callbackResult := ""
         this._callbackReady  := false
  
-        timeoutMs := 1500
+        ; Damos um tempo maior porque o fechamento com animação pode levar ~1–2s.
+        timeoutMs := 4000
         start := A_TickCount
         while (!this._callbackReady && A_TickCount - start < timeoutMs)
             Sleep 10
  
-        if (!this._callbackReady)
+        elapsed := A_TickCount - start
+        if (!this._callbackReady) {
+            this.Log("CallRadialMenuJson(): TIMEOUT aguardando callback (ms=" . elapsed . ").")
             return ""
+        }
  
         result := this._callbackResult
         this._callbackResult := ""
         this._callbackReady  := false
+
+        this.Log("CallRadialMenuJson(): callback recebido, result='" . result . "'.")
         return result
     }
 
@@ -303,45 +359,57 @@ class RadialMenuUtils {
             cbData := NumGet(lParam, A_PtrSize,   "int")
             pData  := NumGet(lParam, A_PtrSize+8, "ptr")
  
+            this.Log(Format("OnCopyData(): hwnd={}, dwData=0x{:X}, cbData={}", hwnd, dwData, cbData))
+ 
             if (dwData != this._callbackTag || cbData <= 0 || !pData)
                 return 0
  
             json := StrGet(pData, cbData, "UTF-8")
-            if (json = "")
+            if (json = "") {
+                this.Log("OnCopyData(): json vazio.")
                 return 0
+            }
+ 
+            this.Log("OnCopyData(): json='" . SubStr(json, 1, 200) . "'")
  
             ; Espera JSON no formato: { "selected": "id" } ou { "selected": null, "cancelled": true }
-            ; Usamos Jxon_Load se disponível; fallback tosco se não.
+            ; Parse simples via regex, sem depender de Jxon_Load (evita #Warn e ambiguidade de binding).
             selected := ""
-            try {
-                if IsSet(Jxon_Load) {
-                    obj := Jxon_Load(json)
-                    if (IsObject(obj) && obj.Has("selected")) {
-                        val := obj["selected"]
-                        if (Type(val) = "String")
-                            selected := val
-                        else
-                            selected := ""
-                    }
-                }
-            } catch {
+            
+            ; Caso {"selected":"id"}
+            if RegExMatch(json, '"selected"\s*:\s*"([^"]*)"', &m) {
+                selected := m[1]
+                this.Log("OnCopyData(): regex extraiu selected='" . selected . "'.")
             }
+            ; Caso {"selected":null,...}
+            else if RegExMatch(json, '"selected"\s*:\s*null', &m2) {
+                this.Log("OnCopyData(): regex detectou selected=null (cancel).")
+                selected := ""
+            } else {
+                this.Log("OnCopyData(): regex não encontrou 'selected', tratando como cancel.")
+            }
+            
             if (selected = "") {
                 ; Considera cancelado
                 this._callbackResult := ""
+                this.Log("OnCopyData(): nenhum 'selected' válido (cancel ou null).")
             } else {
                 this._callbackResult := selected
+                this.Log("OnCopyData(): parsed selected='" . selected . "'.")
             }
             this._callbackReady := true
-        } catch {
+        } catch as errOuter {
+            this.Log("OnCopyData(): EXCEÇÃO externa: " . errOuter.Message)
         }
         return 0
     }
     
     ;; Executa action do item selecionado
     static _ExecuteSelection(selectedId, items) {
-        if (selectedId = "")
+        if (selectedId = "") {
+            this.Log("ExecuteSelection(): selectedId vazio, nada a executar.")
             return
+        }
         
         for idx, item in items {
             if (!IsObject(item))
@@ -349,12 +417,17 @@ class RadialMenuUtils {
             if (item.Has("id") && item["id"] = selectedId) {
                 if (item.Has("action") && item["action"] != "") {
                     action := item["action"]
+                    this.Log("ExecuteSelection(): selectedId='" . selectedId . "', action='" . action . "'. Chamando HotkeyLoader.ExecuteAction().")
                     ; Usa o mesmo mecanismo de execução de ações do sistema
                     HotkeyLoader.ExecuteAction(action)
+                } else {
+                    this.Log("ExecuteSelection(): item com id='" . selectedId . "' não possui 'action'.")
                 }
                 return
             }
         }
+
+        this.Log("ExecuteSelection(): nenhum item encontrado com id='" . selectedId . "'.")
     }
     
     ;; Helper: junta array com separador

@@ -64,8 +64,8 @@ TaskbarManager.Start()
 ; Pré-aquece HKCheatsheetOverlay em background após um pequeno delay
 SetTimer(() => HKCheatsheetOverlayUtils.Warmup(), -5000)
 
-; Pré-aquece RadialMenu em background para evitar coldstart
-SetTimer(() => Run(A_ScriptDir . "\Tools\RadialMenu\RadialMenu.exe --background",, "Hide"), -6000)
+; Pré-aquece RadialMenu em background para evitar coldstart (singleton, estilo HKCheatsheetOverlay)
+SetTimer(() => RadialMenuUtils.Warmup(), -6000)
 
 ; Hotkey de desenvolvimento/debug
 ^F5::Reload  ; Ctrl + F5 para recarregar

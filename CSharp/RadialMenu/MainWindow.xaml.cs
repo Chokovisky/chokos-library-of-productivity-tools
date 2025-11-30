@@ -33,7 +33,10 @@ public partial class MainWindow : Window
     private IntPtr _hwnd;
     private HwndSource? _hwndSource;
     private Point _originalCursorPos;
+    private Win32.RECT _currentMonitorRect; // For robust ClipCursor across multi-monitor setups
     private bool _cursorHidden = false;
+    private bool _cursorLocked = false;
+    private Point _lockPointScreen;
     
     // Sensitivity - higher = less mouse movement needed
     private double _sensitivity = 2.5;
@@ -388,6 +391,7 @@ public partial class MainWindow : Window
         
         // Get monitor bounds
         var monitorRect = monitorInfo.rcMonitor;
+        _currentMonitorRect = monitorRect;
         int monitorWidth = monitorRect.Right - monitorRect.Left;
         int monitorHeight = monitorRect.Bottom - monitorRect.Top;
         
@@ -447,12 +451,12 @@ public partial class MainWindow : Window
         Canvas.SetLeft(MenuContainer, _menuCenter.X - RadialCanvas.Width / 2);
         Canvas.SetTop(MenuContainer, _menuCenter.Y - RadialCanvas.Height / 2);
         
-        // Reset virtual position to center
-        _virtualX = 0;
-        _virtualY = 0;
+        // Reset selection/cursor state so we always start with no item selected
+        ResetSelectionState();
         
         // Build the visual menu
         BuildMenuVisuals();
+        UpdateItemHighlights();
         App.Log($"Menu built with {_menuItems.Count} items");
         
         // Register for raw input
@@ -732,6 +736,34 @@ public partial class MainWindow : Window
             CancelZone.StrokeThickness = 2;
         }
     }
+
+    private void ResetSelectionState()
+    {
+        // Reset selection-related state so each invocation starts with no item selected.
+        _virtualX = 0;
+        _virtualY = 0;
+        _selectedIndex = -1;
+        _hasSelection = false;
+        _lastAngle = 0;
+
+        // Center text should represent the neutral/cancel state.
+        if (CenterText != null)
+        {
+            CenterText.Text = "Cancel";
+            CenterText.Foreground = (Brush)FindResource("TextSecondaryBrush");
+        }
+
+        // Hide directional visuals until the user moves.
+        if (SelectionIndicator != null)
+        {
+            SelectionIndicator.Visibility = Visibility.Collapsed;
+        }
+
+        if (DirectionLine != null)
+        {
+            DirectionLine.Visibility = Visibility.Collapsed;
+        }
+    }
     
     #endregion
     
@@ -810,6 +842,12 @@ public partial class MainWindow : Window
                         
                         // Update UI
                         Dispatcher.BeginInvoke(UpdateSelection);
+
+                        // Hard-freeze OS cursor at the lock point so it cannot escape to another monitor.
+                        if (_cursorLocked)
+                        {
+                            Win32.SetCursorPos((int)_lockPointScreen.X, (int)_lockPointScreen.Y);
+                        }
                     }
                 }
             }
@@ -872,11 +910,13 @@ public partial class MainWindow : Window
 
             // Get current cursor and monitor
             Win32.GetCursorPos(out Win32.POINT cursorPos);
+            _originalCursorPos = new Point(cursorPos.X, cursorPos.Y);
             var monitor = Win32.MonitorFromPoint(cursorPos, Win32.MONITOR_DEFAULTTONEAREST);
             var monitorInfo = new Win32.MONITORINFO { cbSize = (uint)Marshal.SizeOf<Win32.MONITORINFO>() };
             Win32.GetMonitorInfo(monitor, ref monitorInfo);
-
+ 
             var monitorRect = monitorInfo.rcMonitor;
+            _currentMonitorRect = monitorRect;
             int monitorWidth = monitorRect.Right - monitorRect.Left;
             int monitorHeight = monitorRect.Bottom - monitorRect.Top;
 
@@ -907,17 +947,19 @@ public partial class MainWindow : Window
             _virtualX = 0;
             _virtualY = 0;
 
-            // Build visuals with new items
-            BuildMenuVisuals();
-            App.Log($"UpdateFromJson: menu rebuilt with {_menuItems.Count} items");
-
-            // Lock/hide cursor when actually showing (warmup já passou)
+            // Lock/hide cursor as early as possible (QoL: freeze pointer immediately on hotkey)
             double screenCenterX = monitorRect.Left + menuCenterX;
             double screenCenterY = monitorRect.Top + menuCenterY;
 
             HideCursor();
             LockCursor(screenCenterX, screenCenterY);
 
+            // Build visuals with new items
+            BuildMenuVisuals();
+            ResetSelectionState();
+            UpdateItemHighlights();
+            App.Log($"UpdateFromJson: menu rebuilt with {_menuItems.Count} items");
+ 
             // Show menu (reuse open animation)
             Show();
             Activate();
@@ -950,18 +992,33 @@ public partial class MainWindow : Window
     
     private void LockCursor(double x, double y)
     {
-        // Lock cursor to a single point
+        // Lock cursor to the current monitor bounds, then center it.
+        // This prevents the pointer from escaping to another screen during the radial gesture.
         int ix = (int)x;
         int iy = (int)y;
-        
-        var rect = new Win32.RECT { Left = ix, Top = iy, Right = ix + 1, Bottom = iy + 1 };
-        Win32.ClipCursor(ref rect);
+
+        _lockPointScreen = new Point(ix, iy);
+        _cursorLocked = true;
+ 
+        // If we have a valid monitor rect, clip to it; otherwise fall back to a tiny rect.
+        if (_currentMonitorRect.Right > _currentMonitorRect.Left &&
+            _currentMonitorRect.Bottom > _currentMonitorRect.Top)
+        {
+            Win32.ClipCursor(ref _currentMonitorRect);
+        }
+        else
+        {
+            var rectFallback = new Win32.RECT { Left = ix, Top = iy, Right = ix + 1, Bottom = iy + 1 };
+            Win32.ClipCursor(ref rectFallback);
+        }
+ 
         Win32.SetCursorPos(ix, iy);
     }
-    
+     
     private void UnlockCursor()
     {
         Win32.ClipCursor(IntPtr.Zero);
+        _cursorLocked = false;
         
         // Restore original position
         Win32.SetCursorPos((int)_originalCursorPos.X, (int)_originalCursorPos.Y);
@@ -1006,20 +1063,77 @@ public partial class MainWindow : Window
     private void Backdrop_MouseDown(object sender, MouseButtonEventArgs e)
     {
         App.Log($"Backdrop_MouseDown: {e.ChangedButton}");
-        // Click on backdrop cancels
-        CloseWithResult(null);
+
+        // Profissional: não trate clique rápido de botão esquerdo no backdrop como cancel
+        // (isso estava gerando "selected": null mesmo quando o usuário pretendia escolher).
+        // Cancelar só explicitamente via:
+        // - Botão direito no backdrop
+        // - ESC (Window_KeyDown)
+        // - Zona de cancel no centro
+        if (e.ChangedButton == MouseButton.Right)
+        {
+            CloseWithResult(null);
+            e.Handled = true;
+        }
     }
     
     private void ConfirmSelection()
     {
-        if (_selectedIndex >= 0 && _selectedIndex < _menuItems.Count)
+        // Use a more robust selection resolution so fast gestures don't get misclassified as cancel.
+        int index = GetSelectionIndexForConfirm();
+        if (index >= 0 && index < _menuItems.Count)
         {
-            CloseWithResult(_menuItems[_selectedIndex]);
+            CloseWithResult(_menuItems[index]);
         }
         else
         {
             CloseWithResult(null);
         }
+    }
+
+    /// <summary>
+    /// Resolve the final selection index at the moment of confirmation, making
+    /// fast flicks more forgiving and avoiding spurious "cancelled" results.
+    /// Strategy:
+    /// 1) If the current _selectedIndex is valid, use it.
+    /// 2) Otherwise, if we ever had a valid selection during this gesture,
+    ///    derive the index from _lastAngle.
+    /// 3) As a last resort, if the current virtual distance is clearly outside
+    ///    the cancel radius, derive the index directly from the current vector.
+    /// 4) If none of the above yields a valid index, treat as cancel (-1).
+    /// </summary>
+    private int GetSelectionIndexForConfirm()
+    {
+        if (_menuItems.Count == 0)
+            return -1;
+
+        // 1) Prefer the current highlight if it's valid
+        if (_selectedIndex >= 0 && _selectedIndex < _menuItems.Count)
+            return _selectedIndex;
+
+        // 2) If we had a selection before, reuse the last known angle
+        if (_hasSelection)
+        {
+            double anglePerItem = 360.0 / _menuItems.Count;
+            int fromLast = (int)((_lastAngle + anglePerItem / 2) % 360 / anglePerItem);
+            if (fromLast >= 0 && fromLast < _menuItems.Count)
+                return fromLast;
+        }
+
+        // 3) Fallback: derive from current vector if we're clearly outside the cancel zone
+        double distance = Math.Sqrt(_virtualX * _virtualX + _virtualY * _virtualY);
+        if (distance > _cancelRadius)
+        {
+            double angle = Math.Atan2(_virtualY, _virtualX) * 180 / Math.PI;
+            angle = (angle + 90 + 360) % 360; // normalize to start from top
+            double anglePerItem = 360.0 / _menuItems.Count;
+            int fromVector = (int)((angle + anglePerItem / 2) % 360 / anglePerItem);
+            if (fromVector >= 0 && fromVector < _menuItems.Count)
+                return fromVector;
+        }
+
+        // 4) True cancel
+        return -1;
     }
     
     #endregion
