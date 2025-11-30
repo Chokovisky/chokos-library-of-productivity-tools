@@ -6,9 +6,14 @@
 
 ; #region Inicialização do Core
 Core_Initialize() {
-    ; CRÍTICO: CapsLock deve SEMPRE estar desligada
+    ; CRÍTICO: CapsLock deve iniciar desligada, mas NÃO em modo AlwaysOff.
     ; A hotkey CapsLock:: é registrada em Keybindings.ahk
-    SetCapsLockState("AlwaysOff")
+    ; Usamos "Off" para apenas garantir o estado inicial sem alterar o
+    ; comportamento físico ao segurar CapsLock.
+    SetCapsLockState("Off")
+    ; Padrão usado em vários snippets: impedir que o AHK tente restaurar
+    ; automaticamente o estado do Caps ao enviar letras.
+    SetStoreCapsLockMode("Off")
 }
 ; #endregion
 
@@ -16,6 +21,16 @@ Core_Initialize() {
 
 ; CRÍTICO: Esta função é chamada quando CapsLock é pressionado sozinho
 Core_HandleCapsPress() {
+    Global LOGS_PATH
+    try {
+        FileAppend(
+            FormatTime(, "yyyy-MM-dd HH:mm:ss")
+            . " | Core_HandleCapsPress fired. Caps T=" . GetKeyState("CapsLock", "T")
+            . " P=" . GetKeyState("CapsLock", "P")
+            . " A_ThisHotkey=" . A_ThisHotkey . "`n"
+            , LOGS_PATH . "\capslock_debug.log"
+        )
+    }
     Send("{Esc}")
 }
 
@@ -23,6 +38,34 @@ Core_HandleCapsPress() {
 ; Mantém o nome antigo para compatibilidade e expõe um nome semântico para o configurador.
 Core_HandleCapsHotkey() {
     Core_HandleCapsPress()
+}
+
+; Alterna o CapsLock real sem interferir no hyperkey (usado por +CapsLock no JSON)
+Core_ToggleTrueCapsLock() {
+    Global LOGS_PATH
+    beforeT := GetKeyState("CapsLock", "T")
+    beforeP := GetKeyState("CapsLock", "P")
+    try {
+        FileAppend(
+            FormatTime(, "yyyy-MM-dd HH:mm:ss")
+            . " | Core_ToggleTrueCapsLock BEFORE: T=" . beforeT . " P=" . beforeP
+            . " A_PriorKey=" . A_PriorKey . " A_ThisHotkey=" . A_ThisHotkey . "`n"
+            , LOGS_PATH . "\capslock_debug.log"
+        )
+    }
+
+    SetCapsLockState(!beforeT)
+
+    afterT := GetKeyState("CapsLock", "T")
+    afterP := GetKeyState("CapsLock", "P")
+    try {
+        FileAppend(
+            FormatTime(, "yyyy-MM-dd HH:mm:ss")
+            . " | Core_ToggleTrueCapsLock AFTER:  T=" . afterT . " P=" . afterP
+            . " A_PriorKey=" . A_PriorKey . " A_ThisHotkey=" . A_ThisHotkey . "`n"
+            , LOGS_PATH . "\capslock_debug.log"
+        )
+    }
 }
 
 ; CRÍTICO: Função de ciclo de perfis - EXTREMO CUIDADO aqui!

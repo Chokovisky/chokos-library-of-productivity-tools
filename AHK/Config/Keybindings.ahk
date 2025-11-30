@@ -159,7 +159,7 @@ class HotkeyLoader {
         if (action = "return")
             return
         
-        ; Toggle CapsLock real
+        ; Toggle CapsLock real (comportamento original)
         if (action = "CapsLock") {
             SetCapsLockState(!GetKeyState("CapsLock", "T"))
             return
