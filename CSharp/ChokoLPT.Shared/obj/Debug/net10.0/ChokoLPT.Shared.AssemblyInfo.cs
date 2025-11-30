@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("ChokoLPT.Shared")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+695a66b71a3fe8015269decd8dcadec4ad8833dd")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+42eb9cfd95c51e80acd6475d634a59f7dd89089e")]
 [assembly: System.Reflection.AssemblyProductAttribute("ChokoLPT.Shared")]
 [assembly: System.Reflection.AssemblyTitleAttribute("ChokoLPT.Shared")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

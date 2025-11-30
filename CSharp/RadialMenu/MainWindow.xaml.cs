@@ -26,9 +26,22 @@ public partial class MainWindow : Window
     private int _debugCounter = 0;
     private Point _menuCenter;
     private double _menuRadius = 150;
-    private double _cancelRadius = 30;  // Smaller cancel zone
+    private double _cancelRadius = 30;  // Smaller cancel zone (legacy, still used for visuals)
     private double _innerRadius = 50;
+ 
+    // Old single-threshold selection radius (kept for potential tuning, no longer used directly)
     private double _selectionThreshold = 15;  // Minimum distance to select (very small!)
+ 
+    // New radial hysteresis around center (deadzone / cancel zone)
+    // Valores trazidos do playground de tuning (RadialMenuTuning)
+    private double _cancelEnterRadius = 12.0;   // distância para voltar ao cancel duro
+    private double _cancelExitRadius  = 15.2;   // distância para sair do cancel e iniciar seleção
+ 
+    // Sticky selection (angular hysteresis)
+    private int _committedIndex = -1;
+    private double _committedAngle = 0.0;
+    private double _angleHysteresisFactor = 0.66; // 0..1, maior = mais "pegajoso"
+ 
     private bool _isClosing = false;
     private IntPtr _hwnd;
     private HwndSource? _hwndSource;
@@ -37,12 +50,12 @@ public partial class MainWindow : Window
     private bool _cursorHidden = false;
     private bool _cursorLocked = false;
     private Point _lockPointScreen;
-    
+     
     // Sensitivity - higher = less mouse movement needed
-    private double _sensitivity = 2.5;
-    
+    private double _sensitivity = 1.5;
+     
     // Decay factor - how fast the position returns toward center when changing direction
-    private double _decayFactor = 0.15;
+    private double _decayFactor = 0.07;
     
     // Track last angle for smoother transitions
     private double _lastAngle = 0;
@@ -597,16 +610,18 @@ public partial class MainWindow : Window
     
     private void UpdateSelection()
     {
-        // Calculate distance from center
+        // Radial distance in the virtual space
         double distance = Math.Sqrt(_virtualX * _virtualX + _virtualY * _virtualY);
         double canvasCenter = RadialCanvas.Width / 2;
-        
-        int newSelection;
-        
-        if (distance < _selectionThreshold)
+
+        int newSelection = _selectedIndex;
+
+        // CASE 1: Hard cancel zone (very small radius)
+        if (distance <= _cancelEnterRadius)
         {
-            // In cancel zone - very small movement keeps you in center
+            _committedIndex = -1;
             newSelection = -1;
+
             CenterText.Text = "Cancel";
             CenterText.Foreground = (Brush)FindResource("TextSecondaryBrush");
             SelectionIndicator.Visibility = Visibility.Collapsed;
@@ -615,37 +630,77 @@ public partial class MainWindow : Window
         }
         else
         {
-            // Calculate angle - selection is purely based on direction
-            double angle = Math.Atan2(_virtualY, _virtualX) * 180 / Math.PI;
-            angle = (angle + 90 + 360) % 360; // Normalize to start from top
-            
-            // Determine which item based on angle
-            double anglePerItem = 360.0 / _menuItems.Count;
-            newSelection = (int)((angle + anglePerItem / 2) % 360 / anglePerItem);
-            
-            if (newSelection >= 0 && newSelection < _menuItems.Count)
+            // CASE 2: Neutral band between enter/exit radius -> still treated as cancel until user commits
+            if (_committedIndex == -1 && distance < _cancelExitRadius)
             {
-                CenterText.Text = _menuItems[newSelection].Label;
-                CenterText.Foreground = (Brush)FindResource("TextBrush");
-                
-                // Show selection indicator
-                UpdateSelectionIndicator(newSelection);
-                
-                // Show direction line (subtle visual feedback)
-                DirectionLine.Visibility = Visibility.Visible;
-                double lineLength = Math.Min(distance, 60);
-                double lineAngle = Math.Atan2(_virtualY, _virtualX);
-                DirectionLine.X1 = canvasCenter;
-                DirectionLine.Y1 = canvasCenter;
-                DirectionLine.X2 = canvasCenter + Math.Cos(lineAngle) * lineLength;
-                DirectionLine.Y2 = canvasCenter + Math.Sin(lineAngle) * lineLength;
-                
-                _hasSelection = true;
-                _lastAngle = angle;
+                newSelection = -1;
+
+                CenterText.Text = "Cancel";
+                CenterText.Foreground = (Brush)FindResource("TextSecondaryBrush");
+                SelectionIndicator.Visibility = Visibility.Collapsed;
+                DirectionLine.Visibility = Visibility.Collapsed;
+                _hasSelection = false;
+            }
+            else
+            {
+                // CASE 3: Selection active - purely angular, with sticky selection (hysteresis)
+                if (_menuItems.Count == 0)
+                    return;
+
+                // Calculate angle in degrees, normalized so 0 is "up"
+                double angle = Math.Atan2(_virtualY, _virtualX) * 180 / Math.PI;
+                angle = (angle + 90 + 360) % 360;
+
+                double anglePerItem = 360.0 / _menuItems.Count;
+                int rawIndex = (int)((angle + anglePerItem / 2) % 360 / anglePerItem);
+
+                if (_committedIndex == -1)
+                {
+                    // First time we leave cancel zone: commit immediately
+                    _committedIndex = rawIndex;
+                    _committedAngle = angle;
+                }
+                else
+                {
+                    // Sticky selection: only change when we've clearly "moved into" another slice
+                    double boundary = anglePerItem * 0.5 * _angleHysteresisFactor; // hysteresis around slice center
+                    double deltaAngle = NormalizeAngle(angle - _committedAngle);   // -180 .. 180
+
+                    if (Math.Abs(deltaAngle) > boundary)
+                    {
+                        _committedIndex = rawIndex;
+                        _committedAngle = angle;
+                    }
+                }
+
+                newSelection = _committedIndex;
+
+                if (newSelection >= 0 && newSelection < _menuItems.Count)
+                {
+                    var item = _menuItems[newSelection];
+
+                    CenterText.Text = item.Label;
+                    CenterText.Foreground = (Brush)FindResource("TextBrush");
+
+                    // Selection wedge based on committed index
+                    UpdateSelectionIndicator(newSelection);
+
+                    // Direction line uses current virtual vector (for live feedback)
+                    DirectionLine.Visibility = Visibility.Visible;
+                    double lineLength = Math.Min(distance, 60);
+                    double lineAngle = Math.Atan2(_virtualY, _virtualX);
+                    DirectionLine.X1 = canvasCenter;
+                    DirectionLine.Y1 = canvasCenter;
+                    DirectionLine.X2 = canvasCenter + Math.Cos(lineAngle) * lineLength;
+                    DirectionLine.Y2 = canvasCenter + Math.Sin(lineAngle) * lineLength;
+
+                    _hasSelection = true;
+                    _lastAngle = angle;
+                }
             }
         }
-        
-        // Update item highlights
+
+        // Update item highlights if selection changed
         if (newSelection != _selectedIndex)
         {
             _selectedIndex = newSelection;
@@ -704,6 +759,17 @@ public partial class MainWindow : Window
         
         return new PathGeometry(new[] { figure });
     }
+
+    /// <summary>
+    /// Normalize an angle in degrees to the range [-180, 180].
+    /// </summary>
+    private static double NormalizeAngle(double angle)
+    {
+        angle %= 360.0;
+        if (angle > 180.0) angle -= 360.0;
+        if (angle < -180.0) angle += 360.0;
+        return angle;
+    }
     
     private void UpdateItemHighlights()
     {
@@ -743,22 +809,24 @@ public partial class MainWindow : Window
         _virtualX = 0;
         _virtualY = 0;
         _selectedIndex = -1;
+        _committedIndex = -1;
+        _committedAngle = 0.0;
         _hasSelection = false;
         _lastAngle = 0;
-
+ 
         // Center text should represent the neutral/cancel state.
         if (CenterText != null)
         {
             CenterText.Text = "Cancel";
             CenterText.Foreground = (Brush)FindResource("TextSecondaryBrush");
         }
-
+ 
         // Hide directional visuals until the user moves.
         if (SelectionIndicator != null)
         {
             SelectionIndicator.Visibility = Visibility.Collapsed;
         }
-
+ 
         if (DirectionLine != null)
         {
             DirectionLine.Visibility = Visibility.Collapsed;

@@ -89,14 +89,22 @@
                           StrokeThickness="2"
                           Visibility="Collapsed"/>
                     
-                    <!-- Direction indicator line -->
+                    <!-- Direction indicator line (mais visível) -->
                     <Line x:Name="DirectionLine"
                           X1="200" Y1="200" X2="200" Y2="200"
                           Stroke="{StaticResource AccentBrush}"
-                          StrokeThickness="2"
-                          StrokeDashArray="4 2"
-                          Opacity="0.5"
-                          Visibility="Collapsed"/>
+                          StrokeThickness="4"
+                          StrokeStartLineCap="Round"
+                          StrokeEndLineCap="Round"
+                          Opacity="0.9"
+                          Visibility="Collapsed">
+                        <Line.Effect>
+                            <DropShadowEffect BlurRadius="8"
+                                              ShadowDepth="0"
+                                              Opacity="0.8"
+                                              Color="#CC000000"/>
+                        </Line.Effect>
+                    </Line>
                     
                     <!-- Items container -->
                     <Canvas x:Name="ItemsCanvas"/>
